@@ -1,77 +1,61 @@
-#include <iostream>
+#include <cstdio>
 #include <windows.h>
 #include <string>
 #include <map>
+#include <shellapi.h>
 
-// Buffer to store what the user is typing
+// Tray icon ID and custom message
+#define WM_TRAYICON (WM_USER + 1)
+#define ID_TRAY_EXIT 1001
+#define ID_TRAY_TOGGLE 1002
+
+// Global variables
 std::string buffer = "";
+bool mathModeEnabled = true;
+NOTIFYICONDATA nid = {0};
+HWND hwnd;
 
 // MathKey symbol mappings
 std::map<std::string, std::string> mathSymbols = {
     // Greek letters
-    {"alpha", "α"},
-    {"beta", "β"},
-    {"gamma", "γ"},
-    {"delta", "δ"},
-    {"epsilon", "ε"},
-    {"theta", "θ"},
-    {"lambda", "λ"},
-    {"mu", "μ"},
-    {"pi", "π"},
-    {"sigma", "σ"},
-    {"phi", "φ"},
-    {"omega", "ω"},
+    {"alpha", "α"}, {"beta", "β"}, {"gamma", "γ"},
+    {"delta", "δ"}, {"epsilon", "ε"}, {"theta", "θ"},
+    {"lambda", "λ"}, {"mu", "μ"}, {"pi", "π"},
+    {"sigma", "σ"}, {"phi", "φ"}, {"omega", "ω"},
 
     // Operations
-    {"plus", "+"},
-    {"minus", "-"},
-    {"times", "×"},
-    {"equal", "="},
-    {"leq", "≤"},
-    {"geq", "≥"},
-    {"neq", "≠"},
-    {"approx", "≈"},
-    {"infinity", "∞"},
+    {"plus", "+"}, {"minus", "-"}, {"times", "×"},
+    {"equal", "="}, {"leq", "≤"}, {"geq", "≥"},
+    {"neq", "≠"}, {"approx", "≈"}, {"infinity", "∞"},
     {"pm", "±"},
 
     // Calculus
-    {"integral", "∫"},
-    {"partial", "∂"},
-    {"nabla", "∇"},
-    {"sum", "∑"},
+    {"integral", "∫"}, {"partial", "∂"},
+    {"nabla", "∇"}, {"sum", "∑"},
 
     // Sets
-    {"union", "∪"},
-    {"intersect", "∩"},
-    {"subset", "⊂"},
-    {"in", "∈"},
-    {"forall", "∀"},
-    {"exists", "∃"},
+    {"union", "∪"}, {"intersect", "∩"},
+    {"subset", "⊂"}, {"in", "∈"},
+    {"forall", "∀"}, {"exists", "∃"},
 
     // Arrows
-    {"to", "→"},
-    {"implies", "⇒"},
-    {"iff", "⇔"},
+    {"to", "→"}, {"implies", "⇒"}, {"iff", "⇔"},
 };
 
 // Delete n characters before cursor
 void deleteChars(int n) {
     for (int i = 0; i < n; i++) {
-        // Simulate pressing Backspace
         INPUT input = {0};
         input.type = INPUT_KEYBOARD;
         input.ki.wVk = VK_BACK;
         SendInput(1, &input, sizeof(INPUT));
-
-        // Release Backspace
         input.ki.dwFlags = KEYEVENTF_KEYUP;
         SendInput(1, &input, sizeof(INPUT));
     }
 }
 
-// Type a unicode string into the active window
+// Type a unicode string
 void typeUnicode(const std::string& text) {
-    // Convert UTF-8 string to wide string
     int wlen = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, NULL, 0);
     std::wstring wtext(wlen, 0);
     MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, &wtext[0], wlen);
@@ -84,28 +68,132 @@ void typeUnicode(const std::string& text) {
         input.ki.wScan = wc;
         input.ki.dwFlags = KEYEVENTF_UNICODE;
         SendInput(1, &input, sizeof(INPUT));
-
         input.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
         SendInput(1, &input, sizeof(INPUT));
     }
 }
 
-// Check if buffer matches a MathKey command
+// Call Python parser
+std::string callPythonParser(const std::string& text) {
+    std::string command = "python C:\\Users\\Administrator\\Downloads\\Mathkey\\convert.py " + text;
+
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+    sa.lpSecurityDescriptor = NULL;
+    sa.bInheritHandle = TRUE;
+
+    HANDLE hReadPipe, hWritePipe;
+    CreatePipe(&hReadPipe, &hWritePipe, &sa, 0);
+
+    STARTUPINFOA si = {0};
+    si.cb = sizeof(STARTUPINFOA);
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    si.hStdOutput = hWritePipe;
+    si.hStdError = hWritePipe;
+
+    PROCESS_INFORMATION pi = {0};
+    CreateProcessA(NULL, (LPSTR)command.c_str(), NULL, NULL,
+        TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+
+    CloseHandle(hWritePipe);
+
+    char buf[256];
+    std::string result = "";
+    DWORD bytesRead;
+    while (ReadFile(hReadPipe, buf, sizeof(buf) - 1, &bytesRead, NULL) && bytesRead > 0) {
+        buf[bytesRead] = '\0';
+        result += buf;
+    }
+
+    CloseHandle(hReadPipe);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    if (!result.empty() && result.back() == '\n') {
+        result.pop_back();
+    }
+
+    return result;
+}
+
+// Check buffer and convert
 void checkBuffer() {
+    if (buffer.empty() || !mathModeEnabled) return;
+
+    std::string result = "";
+
     auto it = mathSymbols.find(buffer);
     if (it != mathSymbols.end()) {
-        std::string symbol = it->second;
-        std::cout << "Match found: " << buffer << " → " << symbol << std::endl;
-
-        // Delete the typed word + space
-        deleteChars(buffer.length() + 1);
-
-        // Small delay to let deletions process
-        Sleep(50);
-
-        // Type the symbol
-        typeUnicode(symbol);
+        result = it->second;
     }
+
+    if (result.empty()) {
+        result = callPythonParser(buffer);
+        if (result.empty() || result == buffer) {
+            result = "";
+        }
+    }
+
+    if (!result.empty()) {
+        deleteChars(buffer.length() + 1);
+        Sleep(50);
+        typeUnicode(result);
+        typeUnicode(" ");
+    }
+}
+
+// Update tray icon tooltip based on mode
+void updateTrayIcon() {
+    if (mathModeEnabled) {
+        lstrcpy(nid.szTip, "MathKey - ON (Ctrl+Alt+M to toggle)");
+    } else {
+        lstrcpy(nid.szTip, "MathKey - OFF (Ctrl+Alt+M to toggle)");
+    }
+    Shell_NotifyIcon(NIM_MODIFY, &nid);
+}
+
+// Window procedure — handles tray icon messages
+LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_TRAYICON) {
+        if (lParam == WM_RBUTTONUP) {
+            // Show right-click menu
+            POINT pt;
+            GetCursorPos(&pt);
+
+            HMENU menu = CreatePopupMenu();
+            if (mathModeEnabled) {
+                AppendMenu(menu, MF_STRING, ID_TRAY_TOGGLE, "Disable MathKey");
+            } else {
+                AppendMenu(menu, MF_STRING, ID_TRAY_TOGGLE, "Enable MathKey");
+            }
+            AppendMenu(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenu(menu, MF_STRING, ID_TRAY_EXIT, "Exit");
+
+            SetForegroundWindow(hwnd);
+            TrackPopupMenu(menu, TPM_BOTTOMALIGN | TPM_LEFTALIGN,
+                pt.x, pt.y, 0, hwnd, NULL);
+            DestroyMenu(menu);
+        }
+    }
+
+    if (msg == WM_COMMAND) {
+        if (LOWORD(wParam) == ID_TRAY_EXIT) {
+            Shell_NotifyIcon(NIM_DELETE, &nid);
+            PostQuitMessage(0);
+        }
+        if (LOWORD(wParam) == ID_TRAY_TOGGLE) {
+            mathModeEnabled = !mathModeEnabled;
+            updateTrayIcon();
+        }
+    }
+
+    if (msg == WM_DESTROY) {
+        Shell_NotifyIcon(NIM_DELETE, &nid);
+        PostQuitMessage(0);
+    }
+
+    return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
 // Keyboard hook callback
@@ -114,25 +202,27 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
         KBDLLHOOKSTRUCT* kbStruct = (KBDLLHOOKSTRUCT*)lParam;
         DWORD vkCode = kbStruct->vkCode;
 
+        // Toggle shortcut: Ctrl+Alt+M
+        bool ctrlPressed = GetAsyncKeyState(VK_CONTROL) & 0x8000;
+        bool altPressed = GetAsyncKeyState(VK_MENU) & 0x8000;
+        if (ctrlPressed && altPressed && vkCode == 'M') {
+            mathModeEnabled = !mathModeEnabled;
+            updateTrayIcon();
+            return CallNextHookEx(NULL, nCode, wParam, lParam);
+        }
+
         if (vkCode == VK_SPACE) {
-            // Space pressed — check buffer
-            std::cout << "Buffer: " << buffer << std::endl;
             checkBuffer();
             buffer = "";
         }
         else if (vkCode == VK_BACK) {
-            // Backspace — remove last char from buffer
-            if (!buffer.empty()) {
-                buffer.pop_back();
-            }
+            if (!buffer.empty()) buffer.pop_back();
         }
         else if (vkCode >= 'A' && vkCode <= 'Z') {
-            // Letter key — add lowercase to buffer
             char c = (char)(vkCode + 32);
             buffer += c;
         }
         else {
-            // Any other key — reset buffer
             buffer = "";
         }
     }
@@ -141,27 +231,35 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
 }
 
 int main() {
-    std::cout << "MathKey Desktop - Active!" << std::endl;
-    std::cout << "Type a math word followed by Space to convert." << std::endl;
-    std::cout << "Examples: alpha, beta, pi, integral, union" << std::endl;
-    std::cout << "Press Ctrl+C to exit." << std::endl;
-    std::cout << "----------------------------------------" << std::endl;
-
-    // Set console to UTF-8
     SetConsoleOutputCP(CP_UTF8);
 
-    HHOOK hook = SetWindowsHookEx(
-        WH_KEYBOARD_LL,
-        KeyboardProc,
-        NULL,
-        0
-    );
+    // Register a hidden window class for tray icon messages
+    WNDCLASSEX wc = {0};
+    wc.cbSize = sizeof(WNDCLASSEX);
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = "MathKeyTray";
+    RegisterClassEx(&wc);
 
-    if (hook == NULL) {
-        std::cout << "Failed to install hook!" << std::endl;
-        return 1;
-    }
+    // Create hidden window
+    hwnd = CreateWindowEx(0, "MathKeyTray", "MathKey",
+        0, 0, 0, 0, 0, NULL, NULL, GetModuleHandle(NULL), NULL);
 
+    // Set up tray icon
+    nid.cbSize = sizeof(NOTIFYICONDATA);
+    nid.hWnd = hwnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    nid.uCallbackMessage = WM_TRAYICON;
+    nid.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    lstrcpy(nid.szTip, "MathKey - ON (Ctrl+Alt+M to toggle)");
+    Shell_NotifyIcon(NIM_ADD, &nid);
+
+    // Install keyboard hook
+    HHOOK hook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, NULL, 0);
+    if (hook == NULL) return 1;
+
+    // Message loop
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
