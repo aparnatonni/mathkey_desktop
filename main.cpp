@@ -29,6 +29,14 @@ std::map<std::string, std::string> mathSymbols = {
     {"neq", "≠"}, {"approx", "≈"}, {"infinity", "∞"},
     {"pm", "±"},
 
+    // Powers (standalone)
+    {"square", "²"}, {"squared", "²"},
+    {"cube", "³"}, {"cubed", "³"},
+    {"inverse", "⁻¹"},
+
+    // Roots
+    {"sqrt", "√"}, {"cbrt", "∛"},
+
     // Calculus
     {"integral", "∫"}, {"partial", "∂"},
     {"nabla", "∇"}, {"sum", "∑"},
@@ -41,6 +49,40 @@ std::map<std::string, std::string> mathSymbols = {
     // Arrows
     {"to", "→"}, {"implies", "⇒"}, {"iff", "⇔"},
 };
+
+// Nested script map — superscript and subscript
+std::map<std::string, std::map<char, std::string>> scriptMap = {
+    {"superscript", {
+        {'0',"⁰"},{'1',"¹"},{'2',"²"},{'3',"³"},{'4',"⁴"},
+        {'5',"⁵"},{'6',"⁶"},{'7',"⁷"},{'8',"⁸"},{'9',"⁹"},
+        {'n',"ⁿ"},{'x',"ˣ"},{'a',"ᵃ"},{'b',"ᵇ"},{'c',"ᶜ"},
+        {'d',"ᵈ"},{'e',"ᵉ"},{'i',"ⁱ"},{'j',"ʲ"},{'k',"ᵏ"},
+        {'m',"ᵐ"},{'o',"ᵒ"},{'p',"ᵖ"},{'r',"ʳ"},{'s',"ˢ"},
+        {'t',"ᵗ"},{'u',"ᵘ"},{'v',"ᵛ"},{'w',"ʷ"},{'y',"ʸ"},
+        {'z',"ᶻ"},{'-',"⁻"},{'+',"⁺"}
+    }},
+    {"subscript", {
+        {'0',"₀"},{'1',"₁"},{'2',"₂"},{'3',"₃"},{'4',"₄"},
+        {'5',"₅"},{'6',"₆"},{'7',"₇"},{'8',"₈"},{'9',"₉"},
+        {'a',"ₐ"},{'e',"ₑ"},{'o',"ₒ"},{'x',"ₓ"},{'n',"ₙ"},
+        {'i',"ᵢ"},{'j',"ⱼ"},{'k',"ₖ"},{'m',"ₘ"},{'p',"ₚ"},
+        {'r',"ᵣ"},{'s',"ₛ"},{'t',"ₜ"},{'u',"ᵤ"},{'v',"ᵥ"}
+    }}
+};
+
+// Convert string using script map
+std::string convertScript(const std::string& scriptType, const std::string& chars) {
+    std::string result = "";
+    for (char c : chars) {
+        auto it = scriptMap[scriptType].find(c);
+        if (it != scriptMap[scriptType].end()) {
+            result += it->second;
+        } else {
+            result += c;
+        }
+    }
+    return result;
+}
 
 // Delete n characters before cursor
 void deleteChars(int n) {
@@ -123,11 +165,27 @@ void checkBuffer() {
 
     std::string result = "";
 
-    auto it = mathSymbols.find(buffer);
-    if (it != mathSymbols.end()) {
-        result = it->second;
+    // Pattern 1: "power" + chars → superscript
+    if (buffer.length() > 5 && buffer.substr(0, 5) == "power") {
+        std::string exp = buffer.substr(5);
+        result = convertScript("superscript", exp);
     }
 
+    // Pattern 2: "sub" + chars → subscript
+    else if (buffer.length() > 3 && buffer.substr(0, 3) == "sub") {
+        std::string sub = buffer.substr(3);
+        result = convertScript("subscript", sub);
+    }
+
+    // Pattern 3: check single word map
+    else {
+        auto it = mathSymbols.find(buffer);
+        if (it != mathSymbols.end()) {
+            result = it->second;
+        }
+    }
+
+    // Pattern 4: fallback to Python parser
     if (result.empty()) {
         result = callPythonParser(buffer);
         if (result.empty() || result == buffer) {
@@ -153,11 +211,10 @@ void updateTrayIcon() {
     Shell_NotifyIcon(NIM_MODIFY, &nid);
 }
 
-// Window procedure — handles tray icon messages
+// Window procedure
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == WM_TRAYICON) {
         if (lParam == WM_RBUTTONUP) {
-            // Show right-click menu
             POINT pt;
             GetCursorPos(&pt);
 
@@ -222,6 +279,20 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
             char c = (char)(vkCode + 32);
             buffer += c;
         }
+        else if (vkCode >= 0x30 && vkCode <= 0x39) {
+    // Only buffer digit if Shift is NOT held
+    bool shiftPressed = GetAsyncKeyState(VK_SHIFT) & 0x8000;
+    if (!shiftPressed) {
+        char c = (char)(vkCode);
+        buffer += c;
+    } else {
+        buffer = "";
+    }
+}
+else if (vkCode >= VK_NUMPAD0 && vkCode <= VK_NUMPAD9) {
+    char c = '0' + (vkCode - VK_NUMPAD0);
+    buffer += c;
+}
         else {
             buffer = "";
         }
@@ -233,7 +304,6 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
 int main() {
     SetConsoleOutputCP(CP_UTF8);
 
-    // Register a hidden window class for tray icon messages
     WNDCLASSEX wc = {0};
     wc.cbSize = sizeof(WNDCLASSEX);
     wc.lpfnWndProc = WndProc;
@@ -241,11 +311,9 @@ int main() {
     wc.lpszClassName = "MathKeyTray";
     RegisterClassEx(&wc);
 
-    // Create hidden window
     hwnd = CreateWindowEx(0, "MathKeyTray", "MathKey",
         0, 0, 0, 0, 0, NULL, NULL, GetModuleHandle(NULL), NULL);
 
-    // Set up tray icon
     nid.cbSize = sizeof(NOTIFYICONDATA);
     nid.hWnd = hwnd;
     nid.uID = 1;
@@ -255,11 +323,9 @@ int main() {
     lstrcpy(nid.szTip, "MathKey - ON (Ctrl+Alt+M to toggle)");
     Shell_NotifyIcon(NIM_ADD, &nid);
 
-    // Install keyboard hook
     HHOOK hook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, NULL, 0);
     if (hook == NULL) return 1;
 
-    // Message loop
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
