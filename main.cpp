@@ -1,4 +1,3 @@
-#include <cstdio>
 #include <windows.h>
 #include <string>
 #include <map>
@@ -50,7 +49,7 @@ std::map<std::string, std::string> mathSymbols = {
     {"to", "→"}, {"implies", "⇒"}, {"iff", "⇔"},
 };
 
-// Nested script map — superscript and subscript
+// Nested script map
 std::map<std::string, std::map<char, std::string>> scriptMap = {
     {"superscript", {
         {'0',"⁰"},{'1',"¹"},{'2',"²"},{'3',"³"},{'4',"⁴"},
@@ -115,50 +114,6 @@ void typeUnicode(const std::string& text) {
     }
 }
 
-// Call Python parser
-std::string callPythonParser(const std::string& text) {
-    std::string command = "python C:\\Users\\Administrator\\Downloads\\Mathkey\\convert.py " + text;
-
-    SECURITY_ATTRIBUTES sa;
-    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
-    sa.lpSecurityDescriptor = NULL;
-    sa.bInheritHandle = TRUE;
-
-    HANDLE hReadPipe, hWritePipe;
-    CreatePipe(&hReadPipe, &hWritePipe, &sa, 0);
-
-    STARTUPINFOA si = {0};
-    si.cb = sizeof(STARTUPINFOA);
-    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    si.hStdOutput = hWritePipe;
-    si.hStdError = hWritePipe;
-
-    PROCESS_INFORMATION pi = {0};
-    CreateProcessA(NULL, (LPSTR)command.c_str(), NULL, NULL,
-        TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
-
-    CloseHandle(hWritePipe);
-
-    char buf[256];
-    std::string result = "";
-    DWORD bytesRead;
-    while (ReadFile(hReadPipe, buf, sizeof(buf) - 1, &bytesRead, NULL) && bytesRead > 0) {
-        buf[bytesRead] = '\0';
-        result += buf;
-    }
-
-    CloseHandle(hReadPipe);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-
-    if (!result.empty() && result.back() == '\n') {
-        result.pop_back();
-    }
-
-    return result;
-}
-
 // Check buffer and convert
 void checkBuffer() {
     if (buffer.empty() || !mathModeEnabled) return;
@@ -185,14 +140,6 @@ void checkBuffer() {
         }
     }
 
-    // Pattern 4: fallback to Python parser
-    if (result.empty()) {
-        result = callPythonParser(buffer);
-        if (result.empty() || result == buffer) {
-            result = "";
-        }
-    }
-
     if (!result.empty()) {
         deleteChars(buffer.length() + 1);
         Sleep(50);
@@ -201,7 +148,7 @@ void checkBuffer() {
     }
 }
 
-// Update tray icon tooltip based on mode
+// Update tray icon tooltip
 void updateTrayIcon() {
     if (mathModeEnabled) {
         lstrcpy(nid.szTip, "MathKey - ON (Ctrl+Alt+M to toggle)");
@@ -280,19 +227,18 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
             buffer += c;
         }
         else if (vkCode >= 0x30 && vkCode <= 0x39) {
-    // Only buffer digit if Shift is NOT held
-    bool shiftPressed = GetAsyncKeyState(VK_SHIFT) & 0x8000;
-    if (!shiftPressed) {
-        char c = (char)(vkCode);
-        buffer += c;
-    } else {
-        buffer = "";
-    }
-}
-else if (vkCode >= VK_NUMPAD0 && vkCode <= VK_NUMPAD9) {
-    char c = '0' + (vkCode - VK_NUMPAD0);
-    buffer += c;
-}
+            bool shiftPressed = GetAsyncKeyState(VK_SHIFT) & 0x8000;
+            if (!shiftPressed) {
+                char c = (char)(vkCode);
+                buffer += c;
+            } else {
+                buffer = "";
+            }
+        }
+        else if (vkCode >= VK_NUMPAD0 && vkCode <= VK_NUMPAD9) {
+            char c = '0' + (vkCode - VK_NUMPAD0);
+            buffer += c;
+        }
         else {
             buffer = "";
         }
