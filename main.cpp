@@ -141,11 +141,16 @@ void checkBuffer() {
     }
 
     if (!result.empty()) {
-        deleteChars(buffer.length() + 1);
-        Sleep(50);
-        typeUnicode(result);
-        typeUnicode(" ");
-    }
+    // Mapped word — delete word + space, inject symbol
+    deleteChars(buffer.length() + 1);
+    Sleep(50);
+    typeUnicode(result);
+} else {
+    // Unmapped word — delete word + leading space, reinject word
+    deleteChars(buffer.length() + 1);
+    Sleep(50);
+    typeUnicode(buffer);
+}
 }
 
 // Update tray icon tooltip
@@ -206,6 +211,10 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
         KBDLLHOOKSTRUCT* kbStruct = (KBDLLHOOKSTRUCT*)lParam;
         DWORD vkCode = kbStruct->vkCode;
 
+        if (kbStruct->flags & LLKHF_INJECTED) {
+            return CallNextHookEx(NULL, nCode, wParam, lParam);
+        }
+
         // Toggle shortcut: Ctrl+Alt+M
         bool ctrlPressed = GetAsyncKeyState(VK_CONTROL) & 0x8000;
         bool altPressed = GetAsyncKeyState(VK_MENU) & 0x8000;
@@ -232,8 +241,13 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
                 char c = (char)(vkCode);
                 buffer += c;
             } else {
-                buffer = "";
-            }
+    // If buffer was empty, delete the trailing space
+    if (buffer.empty()) {
+        Sleep(30);
+        deleteChars(1);
+    }
+    buffer = "";
+}
         }
         else if (vkCode >= VK_NUMPAD0 && vkCode <= VK_NUMPAD9) {
             char c = '0' + (vkCode - VK_NUMPAD0);
