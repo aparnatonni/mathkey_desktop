@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <string>
 #include <map>
+#include <unordered_map>
 #include <shellapi.h>
 
 // Tray icon ID and custom message
@@ -16,17 +17,27 @@ HWND hwnd;
 
 // MathKey symbol mappings
 std::map<std::string, std::string> mathSymbols = {
-    // Greek letters
+    // Greek lowercase
     {"alpha", "α"}, {"beta", "β"}, {"gamma", "γ"},
     {"delta", "δ"}, {"epsilon", "ε"}, {"theta", "θ"},
     {"lambda", "λ"}, {"mu", "μ"}, {"pi", "π"},
     {"sigma", "σ"}, {"phi", "φ"}, {"omega", "ω"},
+    {"eta", "η"}, {"zeta", "ζ"}, {"kappa", "κ"},
+    {"nu", "ν"}, {"xi", "ξ"}, {"rho", "ρ"},
+    {"tau", "τ"}, {"upsilon", "υ"}, {"chi", "χ"},
+    {"psi", "ψ"},
+
+    // Greek uppercase (cap prefix)
+    {"capsigma", "Σ"}, {"capdelta", "Δ"}, {"capomega", "Ω"}, {"cappi", "Π"},
+    {"capgamma", "Γ"}, {"caplambda", "Λ"}, {"captheta", "Θ"}, {"capphi", "Φ"},
+    {"capxi", "Ξ"}, {"cappsi", "Ψ"}, {"capupsilon", "Υ"},
 
     // Operations
     {"plus", "+"}, {"minus", "-"}, {"times", "×"},
     {"equal", "="}, {"leq", "≤"}, {"geq", "≥"},
     {"neq", "≠"}, {"approx", "≈"}, {"infinity", "∞"},
-    {"pm", "±"},
+    {"pm", "±"}, {"div", "÷"}, {"cdot", "·"},
+    {"equiv", "≡"}, {"propto", "∝"}, {"sim", "∼"},
 
     // Powers (standalone)
     {"square", "²"}, {"squared", "²"},
@@ -36,17 +47,57 @@ std::map<std::string, std::string> mathSymbols = {
     // Roots
     {"sqrt", "√"}, {"cbrt", "∛"},
 
+    // Degree and angle
+    {"deg", "°"}, {"angle", "∠"}, {"perp", "⊥"},
+    {"parallel", "∥"},
+
     // Calculus
-    {"integral", "∫"}, {"partial", "∂"},
-    {"nabla", "∇"}, {"sum", "∑"},
+    {"integral", "∫"}, {"iint", "∬"}, {"iiint", "∭"},
+    {"oint", "∮"}, {"partial", "∂"},
+    {"nabla", "∇"}, {"sum", "∑"}, {"prod", "∏"},
+    {"lim", "lim"},
 
     // Sets
     {"union", "∪"}, {"intersect", "∩"},
-    {"subset", "⊂"}, {"in", "∈"},
+    {"subset", "⊂"}, {"supset", "⊃"},
+    {"subseteq", "⊆"}, {"supseteq", "⊇"},
+    {"in", "∈"}, {"notin", "∉"},
     {"forall", "∀"}, {"exists", "∃"},
+    {"nexists", "∄"}, {"empty", "∅"},
+
+    // Number sets
+    {"real", "ℝ"}, {"integer", "ℤ"}, {"natural", "ℕ"},
+    {"rational", "ℚ"}, {"complex", "ℂ"},
+
+    // Logic
+    {"and", "∧"}, {"or", "∨"}, {"not", "¬"},
+    {"xor", "⊕"}, {"therefore", "∴"}, {"because", "∵"},
 
     // Arrows
-    {"to", "→"}, {"implies", "⇒"}, {"iff", "⇔"},
+    {"to", "→"}, {"from", "←"}, {"implies", "⇒"},
+    {"iff", "⇔"}, {"uparrow", "↑"}, {"downarrow", "↓"},
+    {"mapsto", "↦"}, {"leftrightarrow", "↔"},
+
+    // Trig inverse
+    {"arcsin", "sin⁻¹"}, {"arccos", "cos⁻¹"}, {"arctan", "tan⁻¹"},
+
+    // Floor and ceiling
+    {"floor", "⌊⌋"}, {"ceil", "⌈⌉"},
+
+    // Misc
+    {"inf", "∞"}, {"dots", "…"}, {"cdots", "⋯"},
+    {"vdots", "⋮"}, {"ddots", "⋱"},
+    {"aleph", "ℵ"}, {"hbar", "ℏ"},
+    {"dagger", "†"}, {"star", "★"},
+    {"checkmark", "✓"}, {"cross", "✗"},
+};
+
+// Prefix to script type mapping
+std::unordered_map<std::string, std::string> prefixToScript = {
+    {"power", "superscript"},
+    {"sub",   "subscript"},
+    {"root",  "root"},
+    {"log",   "log"},
 };
 
 // Nested script map
@@ -81,6 +132,17 @@ std::string convertScript(const std::string& scriptType, const std::string& char
         }
     }
     return result;
+}
+
+// Split buffer into text prefix and number/letter suffix
+std::pair<std::string, std::string> splitBuffer(const std::string& buf) {
+    int i = buf.length() - 1;
+    while (i >= 0 && isdigit(buf[i])) {
+        i--;
+    }
+    std::string prefix = buf.substr(0, i + 1);
+    std::string suffix = buf.substr(i + 1);
+    return {prefix, suffix};
 }
 
 // Delete n characters before cursor
@@ -120,20 +182,26 @@ void checkBuffer() {
 
     std::string result = "";
 
-    // Pattern 1: "power" + chars → superscript
-    if (buffer.length() > 5 && buffer.substr(0, 5) == "power") {
-        std::string exp = buffer.substr(5);
-        result = convertScript("superscript", exp);
-    }
+    // Split buffer into prefix and suffix
+    auto [p, q] = splitBuffer(buffer);
 
-    // Pattern 2: "sub" + chars → subscript
-    else if (buffer.length() > 3 && buffer.substr(0, 3) == "sub") {
-        std::string sub = buffer.substr(3);
-        result = convertScript("subscript", sub);
-    }
+    // Check prefix map
+    auto pit = prefixToScript.find(p);
+    if (pit != prefixToScript.end() && !q.empty()) {
+        std::string scriptType = pit->second;
 
-    // Pattern 3: check single word map
+        if (scriptType == "root") {
+            result = convertScript("superscript", q) + "√";
+        }
+        else if (scriptType == "log") {
+            result = "log" + convertScript("subscript", q);
+        }
+        else {
+            result = convertScript(scriptType, q);
+        }
+    }
     else {
+        // Check single word map
         auto it = mathSymbols.find(buffer);
         if (it != mathSymbols.end()) {
             result = it->second;
@@ -141,16 +209,14 @@ void checkBuffer() {
     }
 
     if (!result.empty()) {
-    // Mapped word — delete word + space, inject symbol
-    deleteChars(buffer.length() + 1);
-    Sleep(50);
-    typeUnicode(result);
-} else {
-    // Unmapped word — delete word + leading space, reinject word
-    deleteChars(buffer.length() + 1);
-    Sleep(50);
-    typeUnicode(buffer);
-}
+        deleteChars(buffer.length() + 1);
+        Sleep(50);
+        typeUnicode(result);
+    } else {
+        deleteChars(buffer.length() + 1);
+        Sleep(50);
+        typeUnicode(buffer);
+    }
 }
 
 // Update tray icon tooltip
@@ -211,6 +277,7 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
         KBDLLHOOKSTRUCT* kbStruct = (KBDLLHOOKSTRUCT*)lParam;
         DWORD vkCode = kbStruct->vkCode;
 
+        // Ignore injected keystrokes
         if (kbStruct->flags & LLKHF_INJECTED) {
             return CallNextHookEx(NULL, nCode, wParam, lParam);
         }
@@ -241,21 +308,20 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
                 char c = (char)(vkCode);
                 buffer += c;
             } else {
-    // If buffer was empty, delete the trailing space
-    if (buffer.empty()) {
-        Sleep(30);
-        deleteChars(1);
-    }
-    buffer = "";
-}
+                if (buffer.empty()) {
+                    Sleep(30);
+                    deleteChars(1);
+                }
+                buffer = "";
+            }
         }
         else if (vkCode >= VK_NUMPAD0 && vkCode <= VK_NUMPAD9) {
             char c = '0' + (vkCode - VK_NUMPAD0);
             buffer += c;
         }
-        else {
-            buffer = "";
-        }
+       else {
+    buffer = "";
+}
     }
 
     return CallNextHookEx(NULL, nCode, wParam, lParam);
